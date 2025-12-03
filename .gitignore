@@ -1,0 +1,100 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+dist/
+build/
+*.egg
+
+# FastAPI
+fastapi/venv/
+fastapi/__pycache__/
+fastapi/*.pyc
+fastapi/.env
+fastapi/output/
+fastapi/input/
+fastapi/logs/
+fastapi/temp/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+lerna-debug.log*
+
+# Next.js
+nextjs/.next/
+nextjs/out/
+nextjs/build/
+nextjs/.env
+nextjs/.env.local
+nextjs/.env.development.local
+nextjs/.env.test.local
+nextjs/.env.production.local
+nextjs/node_modules/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Backup
+backup/
+*.bak
+*.backup
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Playwright
+fastapi/scripts/.playwright/
+
+# Test coverage
+coverage/
+.nyc_output/

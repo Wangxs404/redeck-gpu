@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Node
+scripts/node_modules/
+
+# Data directories (mounted as volumes)
+input/
+output/
+logs/
+temp/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+*.bak

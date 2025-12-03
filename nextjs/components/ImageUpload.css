@@ -1,0 +1,325 @@
+.upload-container {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* 步骤导航 Tab */
+.steps-tabs {
+  display: flex;
+  margin-bottom: 32px;
+  border-bottom: 2px solid #e2e8f0;
+  gap: 0;
+}
+
+.step-tab {
+  flex: 1;
+  padding: 16px 20px;
+  text-align: center;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+  color: #718096;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border-bottom: 3px solid transparent;
+  position: relative;
+  top: 2px;
+}
+
+.step-tab:not(.active):hover:not(:disabled) {
+  color: #4a5568;
+  background: #f7fafc;
+}
+
+.step-tab.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
+  background: transparent;
+}
+
+.step-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 步骤内容区域 */
+.step-content {
+  min-height: 400px;
+}
+
+.step-info {
+  background: #f7fafc;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.step-info p {
+  margin: 8px 0;
+  color: #2d3748;
+  font-size: 14px;
+}
+
+.step-hint {
+  color: #718096;
+  font-size: 13px;
+}
+
+.step-hint.warning {
+  color: #d69e2e;
+}
+
+.action-section {
+  margin-bottom: 24px;
+}
+
+/* 上传区域 */
+.upload-area {
+  margin-bottom: 24px;
+}
+
+.file-input {
+  display: none;
+}
+
+.file-label {
+  display: block;
+  cursor: pointer;
+  border: 2px dashed #cbd5e0;
+  border-radius: 12px;
+  padding: 40px;
+  text-align: center;
+  transition: all 0.3s ease;
+  background: #ffffff;
+}
+
+.file-label:hover {
+  border-color: #667eea;
+  background: #f7fafc;
+}
+
+.upload-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.upload-icon {
+  width: 64px;
+  height: 64px;
+  color: #a0aec0;
+}
+
+.upload-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #2d3748;
+  margin: 0;
+}
+
+.upload-hint {
+  font-size: 14px;
+  color: #718096;
+  margin: 0;
+}
+
+.preview-container {
+  position: relative;
+  width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.preview-image {
+  width: 100%;
+  height: auto;
+  max-height: 400px;
+  object-fit: contain;
+  display: block;
+}
+
+.preview-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.preview-container:hover .preview-overlay {
+  opacity: 1;
+}
+
+.preview-text {
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.file-info {
+  background: #f7fafc;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.file-name,
+.file-size {
+  margin: 8px 0;
+  color: #2d3748;
+  font-size: 14px;
+}
+
+.file-name strong,
+.file-size strong {
+  color: #4a5568;
+  margin-right: 8px;
+}
+
+.button-group {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.btn {
+  flex: 1;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-secondary {
+  background: #e2e8f0;
+  color: #2d3748;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #cbd5e0;
+}
+
+.btn-mineru {
+  width: 100%;
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: white;
+  font-size: 18px;
+  padding: 16px 24px;
+}
+
+.btn-mineru:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+}
+
+.btn-slides {
+  width: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 18px;
+  padding: 16px 24px;
+}
+
+.btn-slides:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.result-message {
+  padding: 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+}
+
+.result-message.success {
+  background: #c6f6d5;
+  color: #22543d;
+  border: 1px solid #9ae6b4;
+}
+
+.result-message.error {
+  background: #fed7d7;
+  color: #742a2a;
+  border: 1px solid #fc8181;
+}
+
+.result-message p {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+}
+
+.result-message p:last-child {
+  margin-bottom: 0;
+}
+
+.file-path {
+  font-size: 12px;
+  word-break: break-all;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(34, 84, 61, 0.2);
+}
+
+.file-path strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* Slides 预览 */
+.slides-preview {
+  margin-top: 16px;
+}
+
+.slides-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #2d3748;
+}
+
+.slides-frame {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 20px;
+  background: #ffffff;
+  max-height: 600px;
+  overflow: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.slides-usage {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(34, 84, 61, 0.2);
+  font-size: 12px;
+  color: #4a5568;
+  word-break: break-all;
+}

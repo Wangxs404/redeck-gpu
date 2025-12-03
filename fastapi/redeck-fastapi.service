@@ -1,0 +1,60 @@
+# ============================================================
+# ReDeck FastAPI Systemd Service File
+# 
+# 安装步骤:
+# 1. 复制此文件到 /etc/systemd/system/
+#    sudo cp redeck-fastapi.service /etc/systemd/system/
+#
+# 2. 重载 systemd
+#    sudo systemctl daemon-reload
+#
+# 3. 启动服务
+#    sudo systemctl start redeck-fastapi
+#
+# 4. 设置开机自启
+#    sudo systemctl enable redeck-fastapi
+#
+# 5. 查看状态
+#    sudo systemctl status redeck-fastapi
+#
+# 6. 查看日志
+#    sudo journalctl -u redeck-fastapi -f
+# ============================================================
+
+[Unit]
+Description=ReDeck FastAPI Backend Service
+Documentation=https://github.com/your-repo/redeck
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# 工作目录（请根据实际路径修改）
+WorkingDirectory=/root/apps/video2ppt/redeck-fastapi
+
+# 环境变量
+Environment=PATH=/root/apps/video2ppt/redeck-fastapi/venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# 启动命令
+ExecStart=/root/apps/video2ppt/redeck-fastapi/venv/bin/python main.py
+
+# 重启策略
+Restart=always
+RestartSec=10
+
+# 超时设置
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+
+# 安全设置
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+

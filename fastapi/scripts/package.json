@@ -1,0 +1,17 @@
+{
+  "name": "redeck-pptx-converter",
+  "version": "1.0.0",
+  "description": "HTML to PPTX converter for ReDeck",
+  "main": "convert-html-to-pptx.js",
+  "scripts": {
+    "convert": "node convert-html-to-pptx.js"
+  },
+  "dependencies": {
+    "playwright": "^1.57.0",
+    "pptxgenjs": "^3.12.0",
+    "sharp": "^0.33.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
