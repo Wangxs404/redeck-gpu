@@ -23,6 +23,9 @@ import re
 # 加载 .env 文件
 load_dotenv()
 
+# R2 上传模块
+from scripts.r2_upload import upload_pptx_to_r2, check_r2_config
+
 # ============ 环境配置 ============
 # 环境标识：development / production
 ENV = os.getenv("ENV", "development")
@@ -478,9 +481,14 @@ async def process_cloud_ocr(request: CloudOcrRequest):
         if not output_pptx_path.exists():
             raise HTTPException(status_code=500, detail="PPTX 文件生成失败")
         
-        # 构建下载 URL
+        # 上传到 R2 并获取公开链接
         pptx_relative_path = str(output_pptx_path.relative_to(BASE_DIR)).replace("\\", "/")
-        download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
+        try:
+            download_url = upload_pptx_to_r2(output_pptx_path, date_str, file_uuid)
+            logger.info(f"[云端OCR] PPTX 已上传到 R2: {download_url}")
+        except Exception as e:
+            logger.warning(f"[云端OCR] R2 上传失败，使用本地链接: {e}")
+            download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
         
         logger.info(f"[云端OCR] PPTX 生成完成: {download_url}")
         
@@ -817,9 +825,14 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
         if not output_pptx_path.exists():
             raise HTTPException(status_code=500, detail="PPTX 文件生成失败")
         
-        # 构建下载 URL
+        # 上传到 R2 并获取公开链接
         pptx_relative_path = str(output_pptx_path.relative_to(BASE_DIR)).replace("\\", "/")
-        download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
+        try:
+            download_url = upload_pptx_to_r2(output_pptx_path, date_str, file_uuid)
+            logger.info(f"[GPU OCR Full] PPTX 已上传到 R2: {download_url}")
+        except Exception as e:
+            logger.warning(f"[GPU OCR Full] R2 上传失败，使用本地链接: {e}")
+            download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
         
         logger.info(f"[GPU OCR Full] PPTX 生成完成: {download_url}")
         
@@ -1807,9 +1820,25 @@ async def convert_html_to_pptx(request: SlidePptxRequest):
                 detail="PPTX 文件生成失败：输出文件不存在"
             )
         
-        # 构建相对路径和下载 URL
+        # 构建相对路径
         relative_path = str(output_file_path.relative_to(BASE_DIR)).replace("\\", "/")
-        download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{relative_path}"
+        
+        # 从路径中提取 date 和 uuid (格式: output/YYYY-MM-DD/uuid/...)
+        path_parts = relative_path.split("/")
+        if len(path_parts) >= 3 and path_parts[0] == "output":
+            date_str = path_parts[1]
+            file_uuid = path_parts[2]
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            file_uuid = str(uuid_lib.uuid4())
+        
+        # 上传到 R2 并获取公开链接
+        try:
+            download_url = upload_pptx_to_r2(output_file_path, date_str, file_uuid)
+            logger.info(f"PPTX 已上传到 R2: {download_url}")
+        except Exception as e:
+            logger.warning(f"R2 上传失败，使用本地链接: {e}")
+            download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{relative_path}"
         
         logger.info(f"PPTX 生成成功: {relative_path}")
         
