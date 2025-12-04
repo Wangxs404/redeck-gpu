@@ -95,6 +95,11 @@ async function main() {
             i++;
         }
     }
+
+    tmpDir = path.resolve(tmpDir);
+    if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+    }
     
     let tempHtmlFile = null;
     

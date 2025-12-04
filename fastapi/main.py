@@ -68,6 +68,7 @@ BASE_DIR = Path(__file__).parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 LOG_DIR = BASE_DIR / "logs"
+TEMP_DIR = BASE_DIR / "temp"
 VENV_SCRIPTS = BASE_DIR / "venv" / "Scripts"
 # 使用 mineru 命令（通过 venv 激活后可用，或直接指定路径）
 MINERU_CMD = "mineru"  # 使用命令名，依赖 PATH 或 venv 激活
@@ -76,6 +77,7 @@ MINERU_CMD = "mineru"  # 使用命令名，依赖 PATH 或 venv 激活
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 INPUT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # 配置静态文件服务，让前端可以通过 HTTP 访问 output 目录下的文件
 app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
@@ -455,7 +457,7 @@ async def process_cloud_ocr(request: CloudOcrRequest):
             str(converter_script),
             str(html_file_path),
             str(output_pptx_path),
-            "--tmp-dir", str(BASE_DIR / "temp")
+            "--tmp-dir", str(TEMP_DIR)
         ]
         
         process = subprocess.run(
@@ -794,7 +796,7 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
             str(converter_script),
             str(html_file_path),
             str(output_pptx_path),
-            "--tmp-dir", str(BASE_DIR / "temp")
+            "--tmp-dir", str(TEMP_DIR)
         ]
         
         process = subprocess.run(
@@ -1757,7 +1759,7 @@ async def convert_html_to_pptx(request: SlidePptxRequest):
             str(converter_script),
             str(html_file_path),
             str(output_file_path),
-            "--tmp-dir", str(BASE_DIR / "temp")
+            "--tmp-dir", str(TEMP_DIR)
         ]
         
         logger.info(f"执行 HTML → PPTX 转换: {' '.join(cmd)}")
