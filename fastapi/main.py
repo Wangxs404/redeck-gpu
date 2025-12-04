@@ -157,19 +157,44 @@ class SlidePromptPreviewRequest(BaseModel):
     image_path: str  # 图片路径，格式: input/YYYY-MM-DD/UUID.ext
 
 
+class GpuOcrRequest(BaseModel):
+    """请求体：GPU OCR 处理"""
+    file_path: str  # 图片路径，格式: input/YYYY-MM-DD/UUID.ext
+    backend: Optional[str] = "vlm-transformers"  # 后端类型：vlm-transformers, vlm-vllm-engine, pipeline
+    lang: Optional[str] = "ch"  # OCR 语言
+    enable_table: Optional[bool] = False  # 是否启用表格解析
+    enable_formula: Optional[bool] = False  # 是否启用公式解析
+
+
+class GpuOcrFullRequest(BaseModel):
+    """请求体：GPU OCR 一键处理（OCR + HTML + PPTX）"""
+    file_path: str  # 图片路径，格式: input/YYYY-MM-DD/UUID.ext
+    backend: Optional[str] = "vlm-transformers"  # 后端类型
+    lang: Optional[str] = "ch"  # OCR 语言
+    model: Optional[str] = None  # LLM 模型（用于 HTML 生成）
+    enable_table: Optional[bool] = False
+    enable_formula: Optional[bool] = False
+
+
+# GPU OCR 配置
+GPU_OCR_BACKEND = os.getenv("GPU_OCR_BACKEND", "vlm-transformers")
+MINERU_MODEL_SOURCE = os.getenv("MINERU_MODEL_SOURCE", "local")
+
+
 @app.get("/")
 async def root():
     """根路径，返回 API 信息"""
     return {
-        "message": "MinerU OCR API",
+        "message": "ReDeck API - 图片转 PPTX 服务",
         "endpoints": {
-            "POST /ocr": "上传图片进行 OCR 识别",
-            "POST /ocr/path": "通过文件路径进行 OCR 识别",
-            "POST /ocr/process": "处理已上传的图片",
-            "POST /vlm": "启动 VLM 对话",
-            "POST /recognize": "识别图片内容",
+            "POST /upload": "上传图片",
+            "POST /ocr/process": "处理已上传的图片（pipeline 后端）",
+            "POST /ocr/process-cloud": "云端 OCR 一键处理",
+            "POST /ocr/process-gpu": "GPU OCR 处理（VLM 后端，高精度）",
+            "POST /ocr/process-gpu-full": "GPU OCR 一键处理（OCR + HTML + PPTX）",
             "POST /slides/html": "生成 HTML Slides",
             "POST /slides/pptx": "将 HTML 转换为 PPTX",
+            "POST /slides/preview-prompt": "预览 LLM Prompt",
             "GET /health": "健康检查"
         }
     }
@@ -475,6 +500,387 @@ async def process_cloud_ocr(request: CloudOcrRequest):
     except Exception as e:
         logger.error(f"[云端OCR] 处理失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"云端 OCR 处理失败: {str(e)}")
+
+
+@app.post("/ocr/process-gpu")
+async def process_gpu_ocr(request: GpuOcrRequest):
+    """
+    使用 GPU 加速进行 OCR 处理（VLM 后端）
+    
+    使用 MinerU VLM 后端进行高精度文档解析，支持：
+    - vlm-transformers: 使用 HuggingFace Transformers（推荐）
+    - vlm-vllm-engine: 使用 vLLM 加速（需安装 vllm）
+    - pipeline: 传统多模型 pipeline
+    
+    Args:
+        request: 包含文件路径和配置的请求体
+        
+    Returns:
+        OCR 处理结果
+    """
+    input_file_path = BASE_DIR / request.file_path
+    
+    if not input_file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {request.file_path}")
+    
+    if not input_file_path.is_file():
+        raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
+    
+    try:
+        # 从路径提取日期和 UUID
+        path_parts = Path(request.file_path).parts
+        if len(path_parts) >= 3:
+            date_str = path_parts[1]
+            file_name = path_parts[2]
+            file_uuid = file_name.split('.')[0]
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            file_uuid = str(uuid_lib.uuid4())
+        
+        # 构建输出路径
+        output_dir = OUTPUT_DIR / date_str / file_uuid
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        backend = request.backend or GPU_OCR_BACKEND
+        
+        logger.info(f"[GPU OCR] 开始处理: {request.file_path}")
+        logger.info(f"[GPU OCR] 后端: {backend}, 语言: {request.lang}")
+        
+        # 运行 GPU OCR
+        result = await run_mineru_gpu(
+            str(input_file_path),
+            str(output_dir),
+            backend=backend,
+            lang=request.lang,
+            enable_table=request.enable_table,
+            enable_formula=request.enable_formula,
+        )
+        
+        # 简化文件命名
+        rename_mapping = simplify_ocr_output(output_dir)
+        
+        logger.info(f"[GPU OCR] 处理完成，重命名 {len(rename_mapping)} 个图片")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "GPU OCR 处理成功",
+            "backend": backend,
+            "outputPath": str(output_dir.relative_to(BASE_DIR)).replace("\\", "/"),
+            "input_file": str(input_file_path.relative_to(BASE_DIR)).replace("\\", "/"),
+            "result": result,
+            "renamed_images": len(rename_mapping),
+        })
+        
+    except FileNotFoundError as e:
+        logger.error(f"[GPU OCR] MinerU 未安装: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"[GPU OCR] 处理失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"GPU OCR 处理失败: {str(e)}")
+
+
+@app.post("/ocr/process-gpu-full")
+async def process_gpu_ocr_full(request: GpuOcrFullRequest):
+    """
+    GPU OCR 一键处理：输入图片路径，输出 PPTX 下载链接
+    
+    完整流程：
+    1. 使用 GPU VLM 后端进行高精度 OCR
+    2. 简化图片文件命名
+    3. 调用 LLM 生成 HTML
+    4. 转换为 PPTX
+    5. 返回下载链接
+    
+    Args:
+        request: 包含图片路径和配置的请求体
+        
+    Returns:
+        包含 PPTX 下载链接的响应
+    """
+    input_file_path = BASE_DIR / request.file_path
+    
+    if not input_file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {request.file_path}")
+    
+    if not input_file_path.is_file():
+        raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
+    
+    try:
+        # 从路径提取日期和 UUID
+        path_parts = Path(request.file_path).parts
+        if len(path_parts) >= 3:
+            date_str = path_parts[1]
+            file_name = path_parts[2]
+            file_uuid = file_name.split('.')[0]
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            file_uuid = str(uuid_lib.uuid4())
+        
+        # 构建输出路径
+        output_dir = OUTPUT_DIR / date_str / file_uuid
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        backend = request.backend or GPU_OCR_BACKEND
+        
+        logger.info(f"[GPU OCR Full] 开始处理: {request.file_path}")
+        logger.info(f"[GPU OCR Full] 后端: {backend}")
+        
+        # Step 1: GPU OCR
+        ocr_result = await run_mineru_gpu(
+            str(input_file_path),
+            str(output_dir),
+            backend=backend,
+            lang=request.lang,
+            enable_table=request.enable_table,
+            enable_formula=request.enable_formula,
+        )
+        
+        logger.info(f"[GPU OCR Full] OCR 完成")
+        
+        # Step 2: 简化文件命名
+        rename_mapping = simplify_ocr_output(output_dir)
+        logger.info(f"[GPU OCR Full] 重命名 {len(rename_mapping)} 个图片")
+        
+        # Step 3: 查找 OCR 输出文件
+        # VLM 后端输出结构: output/{date}/{uuid}/{filename}/vlm/{filename}.md
+        input_filename = input_file_path.stem
+        vlm_dir = output_dir / input_filename / "vlm"
+        md_path = vlm_dir / f"{input_filename}.md"
+        json_path = vlm_dir / f"{input_filename}_middle.json"
+        
+        if not md_path.exists():
+            # 尝试其他可能的路径结构
+            possible_dirs = list(output_dir.rglob("*.md"))
+            if possible_dirs:
+                md_path = possible_dirs[0]
+                vlm_dir = md_path.parent
+                json_path = vlm_dir / md_path.name.replace(".md", "_middle.json")
+            else:
+                raise FileNotFoundError(f"OCR Markdown 文件不存在")
+        
+        if not json_path.exists():
+            raise FileNotFoundError(f"OCR JSON 文件不存在: {json_path}")
+        
+        # 读取系统提示词
+        system_prompt_path = BASE_DIR / "system_prompt.md"
+        if system_prompt_path.exists():
+            system_prompt = system_prompt_path.read_text(encoding="utf-8").strip()
+        else:
+            system_prompt = "You are an AI assistant that generates HTML slides."
+        
+        # 读取 Markdown 和 JSON
+        md_text = md_path.read_text(encoding="utf-8")
+        layout_json = json.load(open(json_path, "r", encoding="utf-8"))
+        
+        # 读取原始图片并编码为 base64
+        with open(input_file_path, "rb") as img_file:
+            image_data = img_file.read()
+            base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        content_type, _ = mimetypes.guess_type(str(input_file_path))
+        if not content_type:
+            content_type = "image/png"
+        data_url = f"data:{content_type};base64,{base64_image}"
+        
+        # 构建消息
+        messages = build_slide_messages(system_prompt, md_text, layout_json, data_url)
+        
+        # Step 4: 调用 LLM 生成 HTML
+        logger.info(f"[GPU OCR Full] 开始生成 HTML...")
+        
+        model = request.model or DEFAULT_MODEL
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 16000,
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": HTTP_REFERER,
+            "X-Title": "ReDeck GPU OCR",
+        }
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
+            
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=f"LLM API 错误: {response.text}")
+            
+            result = response.json()
+            html_content = result["choices"][0]["message"]["content"]
+            usage = result.get("usage", {})
+        
+        # 清理和处理 HTML
+        cleaned_html = clean_html_from_markdown_code_block(html_content)
+        final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid)
+        
+        # 保存 HTML 文件
+        html_file_path = vlm_dir / f"{file_uuid}.html"
+        html_file_path.write_text(final_html, encoding="utf-8")
+        html_relative_path = str(html_file_path.relative_to(BASE_DIR)).replace("\\", "/")
+        
+        logger.info(f"[GPU OCR Full] HTML 生成完成: {html_relative_path}")
+        
+        # Step 5: 转换为 PPTX
+        logger.info(f"[GPU OCR Full] 开始转换 PPTX...")
+        
+        output_pptx_path = vlm_dir / f"{file_uuid}.pptx"
+        scripts_dir = BASE_DIR / "scripts"
+        converter_script = scripts_dir / "convert-html-to-pptx.js"
+        
+        if not converter_script.exists():
+            raise HTTPException(status_code=500, detail="PPTX 转换脚本不存在")
+        
+        cmd = [
+            "node",
+            str(converter_script),
+            str(html_file_path),
+            str(output_pptx_path),
+            "--tmp-dir", str(BASE_DIR / "temp")
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            cwd=str(scripts_dir),
+            timeout=120
+        )
+        
+        if process.returncode != 0:
+            stderr = process.stderr or process.stdout or "转换失败"
+            logger.error(f"[GPU OCR Full] PPTX 转换失败: {stderr}")
+            raise HTTPException(status_code=500, detail=f"PPTX 转换失败: {stderr[:500]}")
+        
+        if not output_pptx_path.exists():
+            raise HTTPException(status_code=500, detail="PPTX 文件生成失败")
+        
+        # 构建下载 URL
+        pptx_relative_path = str(output_pptx_path.relative_to(BASE_DIR)).replace("\\", "/")
+        download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
+        
+        logger.info(f"[GPU OCR Full] PPTX 生成完成: {download_url}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "GPU OCR 一键处理完成",
+            "file_uuid": file_uuid,
+            "date": date_str,
+            "backend": backend,
+            "html_file_path": html_relative_path,
+            "pptx_file_path": pptx_relative_path,
+            "download_url": download_url,
+            "model": model,
+            "usage": usage,
+            "renamed_images": len(rename_mapping)
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[GPU OCR Full] 处理失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"GPU OCR 处理失败: {str(e)}")
+
+
+async def run_mineru_gpu(
+    input_path: str,
+    output_path: str,
+    backend: str = "vlm-transformers",
+    lang: str = "ch",
+    enable_table: bool = False,
+    enable_formula: bool = False,
+) -> dict:
+    """
+    使用 GPU 加速运行 MinerU OCR（VLM 后端）
+    
+    Args:
+        input_path: 输入文件路径
+        output_path: 输出目录路径
+        backend: OCR 后端类型
+        lang: OCR 语言
+        enable_table: 是否启用表格解析
+        enable_formula: 是否启用公式解析
+        
+    Returns:
+        处理结果字典
+    """
+    import asyncio
+    
+    mineru_path = shutil.which(MINERU_CMD)
+    if not mineru_path:
+        raise FileNotFoundError(
+            "MinerU 未安装。请运行:\n"
+            "  pip install 'mineru[vlm-vllm-engine]'\n"
+            "或参考文档: https://opendatalab.github.io/MinerU/"
+        )
+    
+    # 设置环境变量使用本地模型
+    env = os.environ.copy()
+    env["MINERU_MODEL_SOURCE"] = MINERU_MODEL_SOURCE
+    
+    # 构建命令
+    cmd = [
+        mineru_path,
+        "-p", input_path,
+        "-o", output_path,
+        "-b", backend,
+        "-l", lang,
+    ]
+    
+    # 表格和公式选项
+    if not enable_table:
+        cmd.extend(["-t", "false"])
+    if not enable_formula:
+        cmd.extend(["-f", "false"])
+    
+    logger.info(f"[GPU OCR] 执行: {' '.join(cmd)}")
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=600  # 10 分钟超时
+        )
+        
+        stdout_str = stdout.decode("utf-8", errors="replace")
+        stderr_str = stderr.decode("utf-8", errors="replace")
+        
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"MinerU 执行失败 (返回码: {process.returncode})\n"
+                f"错误: {stderr_str or stdout_str or '无输出'}"
+            )
+        
+        # 收集输出文件
+        output_path_obj = Path(output_path)
+        output_files = []
+        if output_path_obj.exists():
+            for file in output_path_obj.rglob("*"):
+                if file.is_file():
+                    output_files.append(str(file.relative_to(output_path_obj)))
+        
+        return {
+            "success": True,
+            "return_code": process.returncode,
+            "stdout": stdout_str,
+            "stderr": stderr_str,
+            "output_files": output_files,
+            "backend": backend,
+        }
+        
+    except asyncio.TimeoutError:
+        raise RuntimeError("MinerU GPU OCR 超时（超过 10 分钟）")
 
 
 async def run_mineru(input_path: str, output_path: str) -> dict:
