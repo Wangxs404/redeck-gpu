@@ -168,7 +168,8 @@ class GpuOcrRequest(BaseModel):
 
 class GpuOcrFullRequest(BaseModel):
     """请求体：GPU OCR 一键处理（OCR + HTML + PPTX）"""
-    file_path: str  # 图片路径，格式: input/YYYY-MM-DD/UUID.ext
+    file_path: Optional[str] = None  # 图片路径，格式: input/YYYY-MM-DD/UUID.ext
+    file_url: Optional[str] = None  # 或者：图片的公开 URL（如 R2 URL）
     backend: Optional[str] = "vlm-transformers"  # 后端类型
     lang: Optional[str] = "ch"  # OCR 语言
     model: Optional[str] = None  # LLM 模型（用于 HTML 生成）
@@ -582,39 +583,87 @@ async def process_gpu_ocr(request: GpuOcrRequest):
 @app.post("/ocr/process-gpu-full")
 async def process_gpu_ocr_full(request: GpuOcrFullRequest):
     """
-    GPU OCR 一键处理：输入图片路径，输出 PPTX 下载链接
+    GPU OCR 一键处理：输入图片路径或公开 URL，输出 PPTX 下载链接
+    
+    支持两种输入方式：
+    - file_path: 已上传的本地文件路径（如 input/2025-12-04/uuid.png）
+    - file_url: 图片的公开 URL（如 R2 URL）
     
     完整流程：
-    1. 使用 GPU VLM 后端进行高精度 OCR
-    2. 简化图片文件命名
-    3. 调用 LLM 生成 HTML
-    4. 转换为 PPTX
-    5. 返回下载链接
+    1. 如果是 URL，先下载图片到本地
+    2. 使用 GPU VLM 后端进行高精度 OCR
+    3. 简化图片文件命名
+    4. 调用 LLM 生成 HTML
+    5. 转换为 PPTX
+    6. 返回下载链接
     
     Args:
-        request: 包含图片路径和配置的请求体
+        request: 包含图片路径/URL 和配置的请求体
         
     Returns:
         包含 PPTX 下载链接的响应
     """
-    input_file_path = BASE_DIR / request.file_path
-    
-    if not input_file_path.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.file_path}")
-    
-    if not input_file_path.is_file():
-        raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
+    # 验证输入：必须提供 file_path 或 file_url 之一
+    if not request.file_path and not request.file_url:
+        raise HTTPException(
+            status_code=400, 
+            detail="必须提供 file_path 或 file_url 参数"
+        )
     
     try:
-        # 从路径提取日期和 UUID
-        path_parts = Path(request.file_path).parts
-        if len(path_parts) >= 3:
-            date_str = path_parts[1]
-            file_name = path_parts[2]
-            file_uuid = file_name.split('.')[0]
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        file_uuid = str(uuid_lib.uuid4())
+        
+        # 如果提供的是 URL，先下载图片
+        if request.file_url:
+            logger.info(f"[GPU OCR Full] 从 URL 下载图片: {request.file_url}")
+            
+            # 下载图片
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(request.file_url)
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"下载图片失败: HTTP {response.status_code}"
+                    )
+                image_data = response.content
+            
+            # 确定文件扩展名
+            content_type = response.headers.get("content-type", "image/png")
+            ext = mimetypes.guess_extension(content_type) or ".png"
+            if ext == ".jpe":
+                ext = ".jpg"
+            
+            # 保存到本地
+            save_dir = INPUT_DIR / date_str
+            save_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{file_uuid}{ext}"
+            input_file_path = save_dir / filename
+            
+            with open(input_file_path, "wb") as f:
+                f.write(image_data)
+            
+            logger.info(f"[GPU OCR Full] 图片已保存: {input_file_path}")
+            
+            # 保存原始 URL 用于 LLM（可直接使用公开 URL）
+            original_image_url = request.file_url
         else:
-            date_str = datetime.now().strftime("%Y-%m-%d")
-            file_uuid = str(uuid_lib.uuid4())
+            # 使用本地文件路径
+            input_file_path = BASE_DIR / request.file_path
+            original_image_url = None
+            
+            if not input_file_path.exists():
+                raise HTTPException(status_code=404, detail=f"文件不存在: {request.file_path}")
+            
+            if not input_file_path.is_file():
+                raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
+            
+            # 从路径提取日期和 UUID
+            path_parts = Path(request.file_path).parts
+            if len(path_parts) >= 3:
+                date_str = path_parts[1]
+                file_name = path_parts[2]
+                file_uuid = file_name.split('.')[0]
         
         # 构建输出路径
         output_dir = OUTPUT_DIR / date_str / file_uuid
@@ -622,7 +671,7 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
         
         backend = request.backend or GPU_OCR_BACKEND
         
-        logger.info(f"[GPU OCR Full] 开始处理: {request.file_path}")
+        logger.info(f"[GPU OCR Full] 开始处理: {input_file_path}")
         logger.info(f"[GPU OCR Full] 后端: {backend}")
         
         # Step 1: GPU OCR
@@ -672,18 +721,24 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
         md_text = md_path.read_text(encoding="utf-8")
         layout_json = json.load(open(json_path, "r", encoding="utf-8"))
         
-        # 读取原始图片并编码为 base64
-        with open(input_file_path, "rb") as img_file:
-            image_data = img_file.read()
-            base64_image = base64.b64encode(image_data).decode('utf-8')
-        
-        content_type, _ = mimetypes.guess_type(str(input_file_path))
-        if not content_type:
-            content_type = "image/png"
-        data_url = f"data:{content_type};base64,{base64_image}"
+        # 准备图片 URL 给 LLM
+        # 如果有原始公开 URL，直接使用（更快，节省 token）
+        # 否则读取本地文件并编码为 base64
+        if original_image_url:
+            image_url_for_llm = original_image_url
+            logger.info(f"[GPU OCR Full] 使用公开 URL 发送给 LLM")
+        else:
+            with open(input_file_path, "rb") as img_file:
+                image_data = img_file.read()
+                base64_image = base64.b64encode(image_data).decode('utf-8')
+            
+            content_type, _ = mimetypes.guess_type(str(input_file_path))
+            if not content_type:
+                content_type = "image/png"
+            image_url_for_llm = f"data:{content_type};base64,{base64_image}"
         
         # 构建消息
-        messages = build_slide_messages(system_prompt, md_text, layout_json, data_url)
+        messages = build_slide_messages(system_prompt, md_text, layout_json, image_url_for_llm)
         
         # Step 4: 调用 LLM 生成 HTML
         logger.info(f"[GPU OCR Full] 开始生成 HTML...")
@@ -766,7 +821,7 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
         
         logger.info(f"[GPU OCR Full] PPTX 生成完成: {download_url}")
         
-        return JSONResponse(content={
+        response_data = {
             "success": True,
             "message": "GPU OCR 一键处理完成",
             "file_uuid": file_uuid,
@@ -778,7 +833,14 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
             "model": model,
             "usage": usage,
             "renamed_images": len(rename_mapping)
-        })
+        }
+        
+        # 如果是通过 URL 输入的，返回保存的本地路径
+        if request.file_url:
+            response_data["source_url"] = request.file_url
+            response_data["saved_file_path"] = str(input_file_path.relative_to(BASE_DIR)).replace("\\", "/")
+        
+        return JSONResponse(content=response_data)
         
     except HTTPException:
         raise
