@@ -915,7 +915,17 @@ async function html2pptx(htmlFile, pres, options = {}) {
 
   try {
     // Use Chrome on macOS, default Chromium on Unix
-    const launchOptions = { env: { TMPDIR: tmpDir } };
+    const launchOptions = {
+      headless: true,  // 确保无头模式
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--single-process'
+      ],
+      env: { TMPDIR: tmpDir }
+    };
     if (process.platform === 'darwin') {
       launchOptions.channel = 'chrome';
     }
