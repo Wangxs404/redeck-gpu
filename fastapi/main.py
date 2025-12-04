@@ -444,7 +444,7 @@ async def process_gpu_ocr_task(params: dict) -> dict:
     
     # 清理和处理 HTML
     cleaned_html = clean_html_from_markdown_code_block(html_content)
-    final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid)
+    final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid, backend="vlm")
     
     # 保存 HTML 文件
     html_file_path = vlm_dir / f"{file_uuid}.html"
@@ -1066,7 +1066,7 @@ async def process_gpu_ocr_full(request: GpuOcrFullRequest):
         
         # 清理和处理 HTML
         cleaned_html = clean_html_from_markdown_code_block(html_content)
-        final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid)
+        final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid, backend="vlm")
         
         # 保存 HTML 文件
         html_file_path = vlm_dir / f"{file_uuid}.html"
@@ -1330,17 +1330,18 @@ def simplify_ocr_output(output_dir: Path) -> dict:
     Returns:
         重命名映射表 {old_name: new_name}
     """
-    # 查找 auto 目录（MinerU 输出结构：uuid/uuid/auto/）
-    auto_dirs = list(output_dir.rglob("auto"))
-    if not auto_dirs:
-        logger.info(f"未找到 auto 目录: {output_dir}")
+    # 查找 OCR 输出目录（支持 auto 和 vlm 两种后端）
+    # MinerU pipeline 后端输出到 auto/，VLM 后端输出到 vlm/
+    ocr_dirs = list(output_dir.rglob("vlm")) + list(output_dir.rglob("auto"))
+    if not ocr_dirs:
+        logger.info(f"未找到 auto 或 vlm 目录: {output_dir}")
         return {}
     
-    auto_dir = auto_dirs[0]
-    images_dir = auto_dir / "images"
+    ocr_dir = ocr_dirs[0]
+    images_dir = ocr_dir / "images"
     
     if not images_dir.exists():
-        logger.info(f"未找到 images 目录: {auto_dir}")
+        logger.info(f"未找到 images 目录: {ocr_dir}")
         return {}
     
     # 1. 重命名图片文件
@@ -1371,7 +1372,7 @@ def simplify_ocr_output(output_dir: Path) -> dict:
         return {}
     
     # 2. 更新 Markdown 文件中的引用
-    for md_file in auto_dir.glob("*.md"):
+    for md_file in ocr_dir.glob("*.md"):
         try:
             content = md_file.read_text(encoding="utf-8")
             original_content = content
@@ -1384,7 +1385,7 @@ def simplify_ocr_output(output_dir: Path) -> dict:
             logger.warning(f"更新 Markdown 失败: {md_file.name}, 错误: {e}")
     
     # 3. 更新 JSON 文件中的引用（_middle.json, _content_list.json 等）
-    for json_file in auto_dir.glob("*.json"):
+    for json_file in ocr_dir.glob("*.json"):
         try:
             content = json_file.read_text(encoding="utf-8")
             original_content = content
@@ -1538,19 +1539,20 @@ def clean_html_from_markdown_code_block(html_content: str) -> str:
     return html_content.strip()
 
 
-def replace_html_image_paths(html_content: str, date_str: str, uuid: str) -> str:
+def replace_html_image_paths(html_content: str, date_str: str, uuid: str, backend: str = "auto") -> str:
     """
     将 HTML 中的图片路径替换为可通过 HTTP 访问的路径
     
     处理三种情况：
-    1. 相对路径：images/xxx.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/auto/images/xxx.jpg
-    2. 绝对路径：F:\\...\\images\\xxx.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/auto/images/xxx.jpg
-    3. 直接文件名：img_01.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/auto/images/img_01.jpg
+    1. 相对路径：images/xxx.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/{backend}/images/xxx.jpg
+    2. 绝对路径：F:\\...\\images\\xxx.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/{backend}/images/xxx.jpg
+    3. 直接文件名：img_01.jpg -> {STATIC_BASE_URL}/static/output/date/uuid/uuid/{backend}/images/img_01.jpg
     
     Args:
         html_content: HTML 内容
         date_str: 日期字符串 (YYYY-MM-DD)
         uuid: UUID 字符串
+        backend: 后端类型 (auto 或 vlm)
         
     Returns:
         替换后的 HTML 内容
@@ -1569,21 +1571,21 @@ def replace_html_image_paths(html_content: str, date_str: str, uuid: str) -> str
     def replace_relative_image(match):
         image_filename = match.group(1)
         # 构建 HTTP 可访问的绝对路径（带协议和主机）
-        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/auto/images/{image_filename}"
+        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/{backend}/images/{image_filename}"
         logger.info(f"替换相对图片路径: images/{image_filename} -> {http_path}")
         return f'src="{http_path}"'
     
     def replace_absolute_image(match):
         image_filename = match.group(2)
         # 构建 HTTP 可访问的绝对路径（带协议和主机）
-        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/auto/images/{image_filename}"
+        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/{backend}/images/{image_filename}"
         logger.info(f"替换绝对/完整图片路径: {match.group(0)} -> {http_path}")
         return f'src="{http_path}"'
     
     def replace_direct_image(match):
         image_filename = match.group(1)
         # 构建 HTTP 可访问的绝对路径（带协议和主机）
-        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/auto/images/{image_filename}"
+        http_path = f"{STATIC_BASE_URL.rstrip('/')}/static/output/{date_str}/{uuid}/{uuid}/{backend}/images/{image_filename}"
         logger.info(f"替换直接图片引用: {image_filename} -> {http_path}")
         return f'src="{http_path}"'
     
