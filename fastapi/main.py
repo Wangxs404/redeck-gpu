@@ -26,6 +26,9 @@ load_dotenv()
 # R2 上传模块
 from scripts.r2_upload import upload_pptx_to_r2, check_r2_config
 
+# 任务队列模块
+from scripts.task_queue import task_queue, TaskStatus
+
 # ============ 环境配置 ============
 # 环境标识：development / production
 ENV = os.getenv("ENV", "development")
@@ -136,6 +139,26 @@ print(f"  HTTP Referer: {HTTP_REFERER}")
 print(f"=" * 50)
 
 
+# ============ 任务队列配置 ============
+MAX_GPU_WORKERS = int(os.getenv("MAX_GPU_WORKERS", "3"))  # 最大并发 GPU 任务数
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化任务队列"""
+    task_queue.max_workers = MAX_GPU_WORKERS
+    await task_queue.start()
+    task_queue.register_handler("gpu_ocr_full", process_gpu_ocr_task)
+    logger.info(f"[TaskQueue] 已启动，最大并发: {MAX_GPU_WORKERS}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时停止任务队列"""
+    await task_queue.stop()
+    logger.info("[TaskQueue] 已停止")
+
+
 class ProcessRequest(BaseModel):
     file_path: str
 
@@ -182,6 +205,16 @@ class GpuOcrFullRequest(BaseModel):
     enable_formula: Optional[bool] = False
 
 
+class AsyncTaskRequest(BaseModel):
+    """请求体：异步任务提交"""
+    file_url: str  # 图片的公开 URL
+    backend: Optional[str] = "vlm-transformers"
+    lang: Optional[str] = "ch"
+    model: Optional[str] = None
+    enable_table: Optional[bool] = False
+    enable_formula: Optional[bool] = False
+
+
 # GPU OCR 配置
 GPU_OCR_BACKEND = os.getenv("GPU_OCR_BACKEND", "vlm-transformers")
 MINERU_MODEL_SOURCE = os.getenv("MINERU_MODEL_SOURCE", "local")
@@ -198,6 +231,9 @@ async def root():
             "POST /ocr/process-cloud": "云端 OCR 一键处理",
             "POST /ocr/process-gpu": "GPU OCR 处理（VLM 后端，高精度）",
             "POST /ocr/process-gpu-full": "GPU OCR 一键处理（OCR + HTML + PPTX）",
+            "POST /tasks/submit": "提交异步 OCR 任务（返回 task_id）",
+            "GET /tasks/{task_id}": "查询任务状态",
+            "GET /tasks/queue/status": "查询队列状态",
             "POST /slides/html": "生成 HTML Slides",
             "POST /slides/pptx": "将 HTML 转换为 PPTX",
             "POST /slides/preview-prompt": "预览 LLM Prompt",
@@ -211,6 +247,7 @@ async def health():
     """健康检查"""
     import shutil
     mineru_path = shutil.which(MINERU_CMD)
+    queue_status = task_queue.get_queue_status()
     return {
         "status": "healthy",
         "env": ENV,
@@ -218,6 +255,255 @@ async def health():
         "mineru_installed": mineru_path is not None,
         "mineru_path": mineru_path,
         "static_base_url": STATIC_BASE_URL,
+        "task_queue": queue_status,
+    }
+
+
+# ============ 异步任务队列 API ============
+
+@app.post("/tasks/submit")
+async def submit_task(request: AsyncTaskRequest):
+    """
+    提交异步 OCR 任务
+    
+    返回 task_id，可通过 GET /tasks/{task_id} 查询状态
+    """
+    task_id = str(uuid_lib.uuid4())
+    
+    params = {
+        "file_url": request.file_url,
+        "backend": request.backend or GPU_OCR_BACKEND,
+        "lang": request.lang,
+        "model": request.model or DEFAULT_MODEL,
+        "enable_table": request.enable_table,
+        "enable_formula": request.enable_formula,
+    }
+    
+    try:
+        task = await task_queue.submit(task_id, "gpu_ocr_full", params)
+        queue_status = task_queue.get_queue_status()
+        
+        return JSONResponse(content={
+            "success": True,
+            "task_id": task_id,
+            "status": task.status.value,
+            "message": "任务已提交",
+            "queue_position": queue_status["queue_size"],
+            "estimated_wait_seconds": queue_status["queue_size"] * 15,  # 预估每个任务15秒
+        })
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tasks/queue/status")
+async def get_queue_status():
+    """获取任务队列状态"""
+    return JSONResponse(content=task_queue.get_queue_status())
+
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """
+    查询任务状态
+    
+    返回任务详情，包括状态、结果或错误信息
+    """
+    task = task_queue.get_task(task_id)
+    
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    
+    return JSONResponse(content=task.to_dict())
+
+
+async def process_gpu_ocr_task(params: dict) -> dict:
+    """
+    GPU OCR 任务处理函数（供任务队列调用）
+    
+    与 /ocr/process-gpu-full 端点相同的处理逻辑
+    """
+    file_url = params["file_url"]
+    backend = params["backend"]
+    lang = params["lang"]
+    model = params["model"]
+    enable_table = params["enable_table"]
+    enable_formula = params["enable_formula"]
+    
+    # 生成文件标识
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    file_uuid = str(uuid_lib.uuid4())
+    
+    logger.info(f"[Task] 开始处理: {file_url}")
+    
+    # 下载图片
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.get(file_url)
+        if response.status_code != 200:
+            raise Exception(f"下载图片失败: HTTP {response.status_code}")
+        image_data = response.content
+    
+    # 确定文件扩展名
+    content_type = response.headers.get("content-type", "image/png")
+    ext = mimetypes.guess_extension(content_type) or ".png"
+    if ext == ".jpe":
+        ext = ".jpg"
+    
+    # 保存到本地
+    save_dir = INPUT_DIR / date_str
+    save_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{file_uuid}{ext}"
+    input_file_path = save_dir / filename
+    
+    with open(input_file_path, "wb") as f:
+        f.write(image_data)
+    
+    logger.info(f"[Task] 图片已保存: {input_file_path}")
+    
+    # 构建输出路径
+    output_dir = OUTPUT_DIR / date_str / file_uuid
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Step 1: GPU OCR
+    ocr_result = await run_mineru_gpu(
+        str(input_file_path),
+        str(output_dir),
+        backend=backend,
+        lang=lang,
+        enable_table=enable_table,
+        enable_formula=enable_formula,
+    )
+    
+    logger.info(f"[Task] OCR 完成")
+    
+    # Step 2: 简化文件命名
+    rename_mapping = simplify_ocr_output(output_dir)
+    
+    # Step 3: 查找 OCR 输出文件
+    input_filename = input_file_path.stem
+    vlm_dir = output_dir / input_filename / "vlm"
+    md_path = vlm_dir / f"{input_filename}.md"
+    json_path = vlm_dir / f"{input_filename}_middle.json"
+    
+    if not md_path.exists():
+        possible_dirs = list(output_dir.rglob("*.md"))
+        if possible_dirs:
+            md_path = possible_dirs[0]
+            vlm_dir = md_path.parent
+            json_path = vlm_dir / md_path.name.replace(".md", "_middle.json")
+        else:
+            raise Exception("OCR Markdown 文件不存在")
+    
+    if not json_path.exists():
+        raise Exception(f"OCR JSON 文件不存在: {json_path}")
+    
+    # 读取系统提示词
+    system_prompt_path = BASE_DIR / "system_prompt.md"
+    if system_prompt_path.exists():
+        system_prompt = system_prompt_path.read_text(encoding="utf-8").strip()
+    else:
+        system_prompt = "You are an AI assistant that generates HTML slides."
+    
+    # 读取 Markdown 和 JSON
+    md_text = md_path.read_text(encoding="utf-8")
+    layout_json = json.load(open(json_path, "r", encoding="utf-8"))
+    
+    # 使用原始公开 URL 发送给 LLM
+    image_url_for_llm = file_url
+    
+    # 构建消息
+    messages = build_slide_messages(system_prompt, md_text, layout_json, image_url_for_llm)
+    
+    # Step 4: 调用 LLM 生成 HTML
+    logger.info(f"[Task] 开始生成 HTML...")
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 16000,
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": HTTP_REFERER,
+        "X-Title": "ReDeck GPU OCR",
+    }
+    
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
+        
+        if response.status_code != 200:
+            raise Exception(f"LLM API 错误: {response.text}")
+        
+        result = response.json()
+        html_content = result["choices"][0]["message"]["content"]
+        usage = result.get("usage", {})
+    
+    # 清理和处理 HTML
+    cleaned_html = clean_html_from_markdown_code_block(html_content)
+    final_html = replace_html_image_paths(cleaned_html, date_str, file_uuid)
+    
+    # 保存 HTML 文件
+    html_file_path = vlm_dir / f"{file_uuid}.html"
+    html_file_path.write_text(final_html, encoding="utf-8")
+    
+    logger.info(f"[Task] HTML 生成完成")
+    
+    # Step 5: 转换为 PPTX
+    output_pptx_path = vlm_dir / f"{file_uuid}.pptx"
+    scripts_dir = BASE_DIR / "scripts"
+    converter_script = scripts_dir / "convert-html-to-pptx.js"
+    
+    if not converter_script.exists():
+        raise Exception("PPTX 转换脚本不存在")
+    
+    cmd = [
+        "node",
+        str(converter_script),
+        str(html_file_path),
+        str(output_pptx_path),
+        "--tmp-dir", str(TEMP_DIR)
+    ]
+    
+    process = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        cwd=str(scripts_dir),
+        timeout=120
+    )
+    
+    if process.returncode != 0:
+        stderr = process.stderr or process.stdout or "转换失败"
+        raise Exception(f"PPTX 转换失败: {stderr[:500]}")
+    
+    if not output_pptx_path.exists():
+        raise Exception("PPTX 文件生成失败")
+    
+    # 上传到 R2
+    pptx_relative_path = str(output_pptx_path.relative_to(BASE_DIR)).replace("\\", "/")
+    try:
+        download_url = upload_pptx_to_r2(output_pptx_path, date_str, file_uuid)
+        logger.info(f"[Task] PPTX 已上传到 R2: {download_url}")
+    except Exception as e:
+        logger.warning(f"[Task] R2 上传失败，使用本地链接: {e}")
+        download_url = f"{STATIC_BASE_URL.rstrip('/')}/static/{pptx_relative_path}"
+    
+    logger.info(f"[Task] 任务完成: {download_url}")
+    
+    return {
+        "success": True,
+        "file_uuid": file_uuid,
+        "date": date_str,
+        "backend": backend,
+        "download_url": download_url,
+        "model": model,
+        "usage": usage,
     }
 
 
